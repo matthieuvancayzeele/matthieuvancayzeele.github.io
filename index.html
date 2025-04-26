@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<!--
+[ 41.928541, 8.799141, 1000 ],
+[ 41.927019, 8.798227, 900 ],
+[ 41.924457, 8.796609, 800 ],
+[ 41.919511, 8.792921, 700 ],
+[ 41.913334, 8.789526, 600 ],
+[ 41.908451, 8.790109, 500 ],
+[ 41.913334, 8.795816, 400 ],
+[ 41.918011, 8.798867, 300 ],
+[ 41.925162, 8.803108, 200 ],
+-->
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>3D Flight Track Visualization with Mapbox and Threebox</title>
+	<link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+	<style>
+		body {
+			margin: 0;
+			padding: 0;
+		}
+
+		#map {
+			position: absolute;
+			top: 0;
+			bottom: 0;
+			width: 100%;
+		}
+	</style>
+</head>
+
+<body>
+	<div id="map"></div>
+	<div style="position: absolute; bottom: 10px; left: 10px; z-index: 1;">
+		<label for="uploadCsv" style="background-color: white; padding: 5px; border: 1px solid #ccc; cursor: pointer;">
+			Upload CSV
+		</label>
+		<input type="file" id="uploadCsv" accept=".csv" style="display: none;" />
+	</div>
+	<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/threebox-plugin@2.2.7/dist/threebox.min.js"></script>
+	<script src="./fit-curve.js"></script>
+	<script>
+		mapboxgl.accessToken = 'pk.eyJ1IjoibWF0dGhpZXV2YW5jYXl6ZWVsZSIsImEiOiJjbTdlMXgwcDUwOWI4MmpzamFocnd2aTYwIn0.FdzZtrXVJ7KWAxR-oN6FJg';
+		const map = new mapboxgl.Map({
+			container: 'map',
+			style: 'mapbox://styles/mapbox/outdoors-v12',
+			center: [8.802933, 41.918634],
+			zoom: 13.5,
+			pitch: 60,
+			bearing: 0
+		});
+
+		// Function to render the flight path
+		function renderFlightPath(data) {
+			if (!window.tb) {
+				console.error('Threebox not initialized');
+				return;
+			}
+			const tb = window.tb;
+			tb.clear();
+
+			// Calculate bounds
+			let minLat = Infinity, minLon = Infinity, maxLat = -Infinity, maxLon = -Infinity;
+			data.forEach(point => {
+				const lat = point[0];
+				const lon = point[1];
+				if (lat < minLat) minLat = lat;
+				if (lat > maxLat) maxLat = lat;
+				if (lon < minLon) minLon = lon;
+				if (lon > maxLon) maxLon = lon;
+			});
+			const padding = 0.01;
+			const bounds = [
+				[minLon - padding, minLat - padding],
+				[maxLon + padding, maxLat + padding]
+			];
+			map.fitBounds(bounds, { padding: 50, duration: 1000 });
+
+			for (let i = 0; i < data.length - 1; i++) {
+				const startPoint = [data[i][1], data[i][0], data[i][2]]; // [lon, lat, alt]
+				const endPoint = [data[i + 1][1], data[i + 1][0], data[i + 1][2]]; // [lon, lat, alt]
+
+				// Draw the 3D flight path line
+				const linedef = [startPoint, endPoint];
+				const line = tb.line({
+					geometry: linedef,
+					color: 'darkblue',
+					width: 5,
+					opacity: 1,
+					pulse: false,
+					altitude: true
+				});
+				tb.add(line);
+
+				// Plane creation
+				const startMerc = mapboxgl.MercatorCoordinate.fromLngLat({ lng: startPoint[0], lat: startPoint[1] });
+				const endMerc = mapboxgl.MercatorCoordinate.fromLngLat({ lng: endPoint[0], lat: endPoint[1] });
+				const deltaXMeters = (endMerc.x - startMerc.x) * 20037508.34 / 2;
+				const deltaYMeters = (endMerc.y - startMerc.y) * 20037508.34 / 2;
+				const width = Math.sqrt(Math.pow(deltaXMeters, 2) + Math.pow(deltaYMeters, 2));
+				const halfWidth = width * 1.48663;
+				const vertices = new Float32Array([
+					0, -halfWidth, 0,
+					0, halfWidth, 0,
+					0, -halfWidth, startPoint[2],
+					0, halfWidth, endPoint[2]
+				]);
+				const indices = new Uint32Array([0, 1, 2, 1, 3, 2]);
+				const planeGeometry = new THREE.BufferGeometry();
+				planeGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+				planeGeometry.setIndex(new THREE.BufferAttribute(indices, 1));
+				const planeMaterial = new THREE.MeshBasicMaterial({
+					color: 'darkblue',
+					opacity: 0.3,
+					transparent: true,
+					side: THREE.DoubleSide
+				});
+				const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+				const planeObj = tb.Object3D({
+					obj: plane,
+					units: 'meters'
+				});
+				planeObj.setCoords([endPoint[0], endPoint[1], 0]);
+				const rotationZ = (Math.atan2(deltaXMeters, deltaYMeters) - Math.PI / 2) * 360 / (2 * Math.PI) + 90;
+				planeObj.setRotation({ x: 0, y: 0, z: rotationZ });
+				tb.add(planeObj);
+			}
+		}
+
+		// Handle file upload
+		document.getElementById('uploadCsv').addEventListener('change', handleFileUpload);
+
+		function handleFileUpload(event) {
+			const file = event.target.files[0];
+			if (file) {
+				const reader = new FileReader();
+				reader.onload = function(e) {
+					const csvText = e.target.result;
+					parseCsv(csvText);
+				};
+				reader.readAsText(file);
+			}
+		}
+
+		// Parse CSV data
+		function parseCsv(csvText) {
+			const lines = csvText.split('\n');
+			const data = [];
+			for (let i = 1; i < lines.length; i++) {
+				const line = lines[i].trim();
+				if (line) {
+					const values = line.split(',');
+					if (values.length >= 4) {
+						const lat = parseFloat(values[1]); // lat
+						const lon = parseFloat(values[2]); // lng
+						const altitude = parseFloat(values[3]); // altitude
+						if (!isNaN(lat) && !isNaN(lon) && !isNaN(altitude)) {
+							data.push([lat, lon, altitude]);
+						}
+					}
+				}
+			}
+			if (data.length > 0) {
+				renderFlightPath(data);
+			} else {
+				console.error('No valid data found in CSV');
+			}
+		}
+
+		map.on('load', () => {
+			try {
+				// Enable terrain
+				map.addSource('mapbox-dem', {
+					'type': 'raster-dem',
+					'url': 'mapbox://mapbox.mapbox-terrain-dem-v1',
+					'tileSize': 512,
+					'maxzoom': 14
+				});
+				map.setTerrain({ 'source': 'mapbox-dem' });
+
+				const tb = (window.tb = new Threebox(
+					map,
+					map.getCanvas().getContext('webgl'),
+					{ defaultLights: true }
+				));
+
+				map.addLayer({
+					id: 'custom_layer',
+					type: 'custom',
+					render: function (gl, matrix) {
+						tb.update();
+					}
+				});
+
+				const alldatas = [
+					[41.928541, 8.799141, 1000],
+					[41.927780, 8.798684, 950],
+					[41.927019, 8.798227, 900],
+					[41.925738, 8.797418, 850],
+					[41.924457, 8.796609, 800],
+					[41.922984, 8.795765, 750],
+					[41.921247, 8.794843, 725],
+					[41.919511, 8.792921, 700],
+					[41.916422, 8.791223, 650],
+					[41.913334, 8.789526, 600],
+					[41.910892, 8.789818, 550],
+					[41.908451, 8.790109, 500],
+					[41.910892, 8.792962, 450],
+					[41.913334, 8.795816, 400],
+					[41.915673, 8.797341, 350],
+					[41.918011, 8.798867, 300],
+					[41.921586, 8.801038, 250],
+					[41.925162, 8.803108, 200],
+				];
+
+				// Render initial flight path
+				// renderFlightPath(alldatas);
+
+				console.log('Threebox initialized and initial flight path rendered');
+			} catch (error) {
+				console.error('Error initializing Threebox or rendering objects:', error);
+			}
+		});
+	</script>
+</body>
+
+</html>
