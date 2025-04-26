@@ -12,13 +12,7 @@
 </head>
 <body>
     <div id="map"></div>
-    <div style="position: absolute; bottom: 10px; left: 10px; z-index: 1;">
-        <label for="uploadCsv" style="background-color: white; padding: 5px; border: 1px solid #ccc; cursor: pointer;">
-            Upload CSV
-        </label>
-        <input type="file" id="uploadCsv" accept=".csv" style="display: none;" />
-    </div>
-    <!-- Sliders and controls -->
+    <!-- Controls box -->
     <div style="position: absolute; bottom: 50px; left: 10px; right: 10px; z-index: 1; background-color: white; padding: 10px; border: 1px solid #ccc;">
         <div style="display: flex; align-items: center;">
             <label for="startSlider">Start Point: <span id="startValue">0</span></label>
@@ -37,6 +31,17 @@
             <input type="checkbox" id="followPlane" />
             <label for="followPlane">Follow Plane</label>
         </div>
+        <div style="margin-top: 10px;">
+            <button id="playButton">Play</button>
+            <label for="playbackSpeed">Speed (steps/sec): </label>
+            <input type="number" id="playbackSpeed" min="1" value="10" style="width: 50px;" />
+        </div>
+        <div style="margin-top: 10px;">
+            <label for="uploadCsv" style="background-color: white; padding: 5px; border: 1px solid #ccc; cursor: pointer;">
+                Upload CSV
+            </label>
+            <input type="file" id="uploadCsv" accept=".csv" style="display: none;" />
+        </div>
     </div>
     <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/threebox-plugin@2.2.7/dist/threebox.min.js"></script>
@@ -53,6 +58,8 @@
 
         let fullData = [];
         let originalData = [];
+        let isPlaying = false;
+        let playbackInterval;
 
         function interpolateLastSegment(endIndex) {
             const steps = 10;
@@ -303,6 +310,31 @@
             }
 
             updateFlightPath();
+        });
+
+        document.getElementById('playButton').addEventListener('click', () => {
+            if (isPlaying) {
+                clearInterval(playbackInterval);
+                document.getElementById('playButton').textContent = 'Play';
+                isPlaying = false;
+            } else {
+                const maxIndex = (originalData.length - 1) * 10;
+                let currentIndex = parseInt(document.getElementById('startSlider').value);
+                const speed = parseInt(document.getElementById('playbackSpeed').value);
+                playbackInterval = setInterval(() => {
+                    if (currentIndex >= maxIndex) {
+                        clearInterval(playbackInterval);
+                        document.getElementById('playButton').textContent = 'Play';
+                        isPlaying = false;
+                        return;
+                    }
+                    currentIndex++;
+                    document.getElementById('endSlider').value = currentIndex;
+                    updateFlightPath();
+                }, 1000 / speed);
+                document.getElementById('playButton').textContent = 'Stop';
+                isPlaying = true;
+            }
         });
 
         document.getElementById('limitPoints').addEventListener('change', updateFlightPath);
